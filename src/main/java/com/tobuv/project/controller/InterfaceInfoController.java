@@ -2,18 +2,19 @@ package com.tobuv.project.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.google.gson.Gson;
+import com.tobuv.apiclientsdk.client.ApiClient;
 import com.tobuv.project.annotation.AuthCheck;
-import com.tobuv.project.common.BaseResponse;
-import com.tobuv.project.common.DeleteRequest;
-import com.tobuv.project.common.ErrorCode;
-import com.tobuv.project.common.ResultUtils;
+import com.tobuv.project.common.*;
 import com.tobuv.project.constant.CommonConstant;
 import com.tobuv.project.exception.BusinessException;
 import com.tobuv.project.model.dto.interfaceinfo.InterfaceInfoAddRequest;
+import com.tobuv.project.model.dto.interfaceinfo.InterfaceInfoInvokeRequest;
 import com.tobuv.project.model.dto.interfaceinfo.InterfaceInfoQueryRequest;
 import com.tobuv.project.model.dto.interfaceinfo.InterfaceInfoUpdateRequest;
 import com.tobuv.project.model.entity.InterfaceInfo;
 import com.tobuv.project.model.entity.User;
+import com.tobuv.project.model.enums.InterfaceInfoStatusEnum;
 import com.tobuv.project.service.InterfaceInfoService;
 import com.tobuv.project.service.UserService;
 import lombok.extern.slf4j.Slf4j;
@@ -26,7 +27,7 @@ import javax.servlet.http.HttpServletRequest;
 import java.util.List;
 
 /**
- * 帖子接口
+ * 接口管理
  *
  * @author tobuv
  */
@@ -36,10 +37,13 @@ import java.util.List;
 public class InterfaceInfoController {
 
     @Resource
-    private InterfaceInfoService interfaceinfoService;
+    private InterfaceInfoService interfaceInfoService;
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private ApiClient apiClient;
 
     // region 增删改查
 
@@ -58,10 +62,10 @@ public class InterfaceInfoController {
         InterfaceInfo interfaceinfo = new InterfaceInfo();
         BeanUtils.copyProperties(interfaceinfoAddRequest, interfaceinfo);
         // 校验
-        interfaceinfoService.validInterfaceInfo(interfaceinfo, true);
+        interfaceInfoService.validInterfaceInfo(interfaceinfo, true);
         User loginUser = userService.getLoginUser(request);
         interfaceinfo.setUserId(loginUser.getId());
-        boolean result = interfaceinfoService.save(interfaceinfo);
+        boolean result = interfaceInfoService.save(interfaceinfo);
         if (!result) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR);
         }
@@ -84,7 +88,7 @@ public class InterfaceInfoController {
         User user = userService.getLoginUser(request);
         long id = deleteRequest.getId();
         // 判断是否存在
-        InterfaceInfo oldInterfaceInfo = interfaceinfoService.getById(id);
+        InterfaceInfo oldInterfaceInfo = interfaceInfoService.getById(id);
         if (oldInterfaceInfo == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
         }
@@ -92,7 +96,7 @@ public class InterfaceInfoController {
         if (!oldInterfaceInfo.getUserId().equals(user.getId()) && !userService.isAdmin(request)) {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
         }
-        boolean b = interfaceinfoService.removeById(id);
+        boolean b = interfaceInfoService.removeById(id);
         return ResultUtils.success(b);
     }
 
@@ -112,11 +116,11 @@ public class InterfaceInfoController {
         InterfaceInfo interfaceinfo = new InterfaceInfo();
         BeanUtils.copyProperties(interfaceinfoUpdateRequest, interfaceinfo);
         // 参数校验
-        interfaceinfoService.validInterfaceInfo(interfaceinfo, false);
+        interfaceInfoService.validInterfaceInfo(interfaceinfo, false);
         User user = userService.getLoginUser(request);
         long id = interfaceinfoUpdateRequest.getId();
         // 判断是否存在
-        InterfaceInfo oldInterfaceInfo = interfaceinfoService.getById(id);
+        InterfaceInfo oldInterfaceInfo = interfaceInfoService.getById(id);
         if (oldInterfaceInfo == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
         }
@@ -124,7 +128,7 @@ public class InterfaceInfoController {
         if (!oldInterfaceInfo.getUserId().equals(user.getId()) && !userService.isAdmin(request)) {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
         }
-        boolean result = interfaceinfoService.updateById(interfaceinfo);
+        boolean result = interfaceInfoService.updateById(interfaceinfo);
         return ResultUtils.success(result);
     }
 
@@ -139,7 +143,7 @@ public class InterfaceInfoController {
         if (id <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
-        InterfaceInfo interfaceinfo = interfaceinfoService.getById(id);
+        InterfaceInfo interfaceinfo = interfaceInfoService.getById(id);
         return ResultUtils.success(interfaceinfo);
     }
 
@@ -157,7 +161,7 @@ public class InterfaceInfoController {
             BeanUtils.copyProperties(interfaceinfoQueryRequest, interfaceinfoQuery);
         }
         QueryWrapper<InterfaceInfo> queryWrapper = new QueryWrapper<>(interfaceinfoQuery);
-        List<InterfaceInfo> interfaceinfoList = interfaceinfoService.list(queryWrapper);
+        List<InterfaceInfo> interfaceinfoList = interfaceInfoService.list(queryWrapper);
         return ResultUtils.success(interfaceinfoList);
     }
 
@@ -190,10 +194,104 @@ public class InterfaceInfoController {
         queryWrapper.like(StringUtils.isNotBlank(description), "content", description);
         queryWrapper.orderBy(StringUtils.isNotBlank(sortField),
                 sortOrder.equals(CommonConstant.SORT_ORDER_ASC), sortField);
-        Page<InterfaceInfo> interfaceinfoPage = interfaceinfoService.page(new Page<>(current, size), queryWrapper);
+        Page<InterfaceInfo> interfaceinfoPage = interfaceInfoService.page(new Page<>(current, size), queryWrapper);
         return ResultUtils.success(interfaceinfoPage);
     }
 
     // endregion
 
+    /**
+     * 发布
+     *
+     * @param idRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/online")
+    @AuthCheck(mustRole = "admin")
+    public BaseResponse<Boolean> onlineInterfaceInfo(@RequestBody IdRequest idRequest,
+                                                     HttpServletRequest request) {
+        if (idRequest == null || idRequest.getId() <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        long id = idRequest.getId();
+        // 判断是否存在
+        InterfaceInfo oldInterfaceInfo = interfaceInfoService.getById(id);
+        if (oldInterfaceInfo == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
+        }
+        // 判断该接口是否可以调用
+        com.tobuv.apiclientsdk.model.User user = new com.tobuv.apiclientsdk.model.User();
+        user.setUsername("test");
+        String username = apiClient.getUsernameByPost(user);
+        if (StringUtils.isBlank(username)) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "接口验证失败");
+        }
+        // 仅本人或管理员可修改
+        InterfaceInfo interfaceInfo = new InterfaceInfo();
+        interfaceInfo.setId(id);
+        interfaceInfo.setStatus(InterfaceInfoStatusEnum.ONLINE.getValue());
+        boolean result = interfaceInfoService.updateById(interfaceInfo);
+        return ResultUtils.success(result);
+    }
+
+    /**
+     * 下线
+     *
+     * @param idRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/offline")
+    @AuthCheck(mustRole = "admin")
+    public BaseResponse<Boolean> offlineInterfaceInfo(@RequestBody IdRequest idRequest,
+                                                      HttpServletRequest request) {
+        if (idRequest == null || idRequest.getId() <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        long id = idRequest.getId();
+        // 判断是否存在
+        InterfaceInfo oldInterfaceInfo = interfaceInfoService.getById(id);
+        if (oldInterfaceInfo == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
+        }
+        // 仅本人或管理员可修改
+        InterfaceInfo interfaceInfo = new InterfaceInfo();
+        interfaceInfo.setId(id);
+        interfaceInfo.setStatus(InterfaceInfoStatusEnum.OFFLINE.getValue());
+        boolean result = interfaceInfoService.updateById(interfaceInfo);
+        return ResultUtils.success(result);
+    }
+    /**
+     * 测试调用
+     *
+     * @param interfaceInfoInvokeRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/invoke")
+    public BaseResponse<Object> invokeInterfaceInfo(@RequestBody InterfaceInfoInvokeRequest interfaceInfoInvokeRequest,
+                                                    HttpServletRequest request) {
+        if (interfaceInfoInvokeRequest == null || interfaceInfoInvokeRequest.getId() <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        long id = interfaceInfoInvokeRequest.getId();
+        String userRequestParams = interfaceInfoInvokeRequest.getUserRequestParams();
+        // 判断是否存在
+        InterfaceInfo oldInterfaceInfo = interfaceInfoService.getById(id);
+        if (oldInterfaceInfo == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
+        }
+        if (oldInterfaceInfo.getStatus() == InterfaceInfoStatusEnum.OFFLINE.getValue()) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "接口已关闭");
+        }
+        User loginUser = userService.getLoginUser(request);
+        String accessKey = loginUser.getAccessKey();
+        String secretKey = loginUser.getSecretKey();
+        ApiClient tempClient = new ApiClient(accessKey, secretKey);
+        Gson gson = new Gson();
+        com.tobuv.apiclientsdk.model.User user = gson.fromJson(userRequestParams, com.tobuv.apiclientsdk.model.User.class);
+        String usernameByPost = tempClient.getUsernameByPost(user);
+        return ResultUtils.success(usernameByPost);
+    }
 }
